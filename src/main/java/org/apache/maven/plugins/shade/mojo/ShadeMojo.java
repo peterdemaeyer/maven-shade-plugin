@@ -368,6 +368,12 @@ public class ShadeMojo
     private boolean useBaseVersion;
 
     /**
+     * When false, omits a shaded jar artifact.
+     */
+    @Parameter( defaultValue = "true" )
+    private boolean shadeJar;
+
+    /**
      * When true, creates a shaded test-jar artifact as well.
      */
     @Parameter( defaultValue = "false" )
@@ -404,40 +410,24 @@ public class ShadeMojo
 
         if ( artifactSelector.isSelected( project.getArtifact() ) && !"pom".equals( project.getArtifact().getType() ) )
         {
-            if ( invalidMainArtifact() )
+            if ( shadeJar )
             {
-                createErrorOutput();
-                throw new MojoExecutionException( "Failed to create shaded artifact, "
-                    + "project main artifact does not exist." );
+                addIfIsFile( artifacts, project.getArtifact().getFile() );
             }
-
-            artifacts.add( project.getArtifact().getFile() );
 
             if ( createSourcesJar )
             {
-                File file = shadedSourcesArtifactFile();
-                if ( file.isFile() )
-                {
-                    sourceArtifacts.add( file );
-                }
+                addIfIsFile( sourceArtifacts, shadedSourcesArtifactFile() );
             }
 
             if ( shadeTestJar )
             {
-                File file = shadedTestArtifactFile();
-                if ( file.isFile() )
-                {
-                    testArtifacts.add( file );
-                }
+                addIfIsFile( testArtifacts, shadedTestArtifactFile() );
             }
 
             if ( createTestSourcesJar )
             {
-                File file = shadedTestSourcesArtifactFile();
-                if ( file.isFile() )
-                {
-                    testSourceArtifacts.add( file );
-                }
+                addIfIsFile( testSourceArtifacts, shadedTestSourcesArtifactFile() );
             }
         }
 
@@ -458,9 +448,12 @@ public class ShadeMojo
 
             List<ResourceTransformer> resourceTransformers = getResourceTransformers();
 
-            ShadeRequest shadeRequest = shadeRequest( artifacts, outputJar, filters, relocators, resourceTransformers );
+            if ( shadeJar ) {
+                ShadeRequest shadeRequest =
+                    shadeRequest( artifacts, outputJar, filters, relocators, resourceTransformers );
 
-            shader.shade( shadeRequest );
+                shader.shade( shadeRequest );
+            }
 
             if ( createSourcesJar )
             {
@@ -497,16 +490,19 @@ public class ShadeMojo
                 if ( finalName != null && finalName.length() > 0 //
                     && !finalName.equals( project.getBuild().getFinalName() ) )
                 {
-                    String finalFileName = finalName + "." + project.getArtifact().getArtifactHandler().getExtension();
-                    File finalFile = new File( outputDirectory, finalFileName );
-                    replaceFile( finalFile, outputJar );
-                    outputJar = finalFile;
+                    if ( shadeJar )
+                    {
+                        String finalFileName = finalName + "." + project.getArtifact().getArtifactHandler().getExtension();
+                        File finalFile = new File( outputDirectory, finalFileName );
+                        replaceFile( finalFile, outputJar );
+                        outputJar = finalFile;
+                    }
 
                     // Also support the sources JAR
                     if ( createSourcesJar )
                     {
-                        finalFileName = finalName + "-sources.jar";
-                        finalFile = new File( outputDirectory, finalFileName );
+                        String finalFileName = finalName + "-sources.jar";
+                        File finalFile = new File( outputDirectory, finalFileName );
                         replaceFile( finalFile, sourcesJar );
                         sourcesJar = finalFile;
                     }
@@ -514,16 +510,16 @@ public class ShadeMojo
                     // Also support the test JAR
                     if ( shadeTestJar )
                     {
-                        finalFileName = finalName + "-tests.jar";
-                        finalFile = new File( outputDirectory, finalFileName );
+                        String finalFileName = finalName + "-tests.jar";
+                        File finalFile = new File( outputDirectory, finalFileName );
                         replaceFile( finalFile, testJar );
                         testJar = finalFile;
                     }
 
                     if ( createTestSourcesJar )
                     {
-                        finalFileName = finalName + "-test-sources.jar";
-                        finalFile = new File( outputDirectory, finalFileName );
+                        String finalFileName = finalName + "-test-sources.jar";
+                        File finalFile = new File( outputDirectory, finalFileName );
                         replaceFile( finalFile, testSourcesJar );
                         testSourcesJar = finalFile;
                     }
@@ -534,12 +530,23 @@ public class ShadeMojo
                 if ( shadedArtifactAttached )
                 {
                     getLog().info( "Attaching shaded artifact." );
-                    projectHelper.attachArtifact( project, project.getArtifact().getType(), shadedClassifierName,
-                                                  outputJar );
+
+                    if ( shadeJar )
+                    {
+                        projectHelper.attachArtifact( project, project.getArtifact().getType(), shadedClassifierName,
+                                                      outputJar );
+                    }
+
                     if ( createSourcesJar )
                     {
                         projectHelper.attachArtifact( project, "java-source", shadedClassifierName + "-sources",
                                                       sourcesJar );
+                    }
+
+                    if ( shadeTestJar )
+                    {
+                        projectHelper.attachArtifact( project, "test-jar",
+                                                      shadedClassifierName + "-tests", testJar );
                     }
 
                     if ( createTestSourcesJar )
@@ -573,7 +580,7 @@ public class ShadeMojo
 
                             replaceFile( shadedTests, testJar );
 
-                            projectHelper.attachArtifact( project, "jar", "tests", shadedTests );
+                            projectHelper.attachArtifact( project, "test-jar", "tests", shadedTests );
                         }
 
                         if ( createTestSourcesJar )
@@ -600,19 +607,6 @@ public class ShadeMojo
         {
             throw new MojoExecutionException( "Error creating shaded jar: " + e.getMessage(), e );
         }
-    }
-
-    private void createErrorOutput()
-    {
-        getLog().error( "The project main artifact does not exist. This could have the following" );
-        getLog().error( "reasons:" );
-        getLog().error( "- You have invoked the goal directly from the command line. This is not" );
-        getLog().error( "  supported. Please add the goal to the default lifecycle via an" );
-        getLog().error( "  <execution> element in your POM and use \"mvn package\" to have it run." );
-        getLog().error( "- You have bound the goal to a lifecycle phase before \"package\". Please" );
-        getLog().error( "  remove this binding from your POM such that the goal will be run in" );
-        getLog().error( "  the proper phase." );
-        getLog().error( "- You removed the configuration of the maven-jar-plugin that produces the main artifact." );
     }
 
     private ShadeRequest shadeRequest( Set<File> artifacts, File outputJar, List<Filter> filters,
@@ -725,9 +719,12 @@ public class ShadeMojo
         }
     }
 
-    private boolean invalidMainArtifact()
+    private static void addIfIsFile( Set<File> artifacts, File file )
     {
-        return project.getArtifact().getFile() == null || !project.getArtifact().getFile().isFile();
+        if ( file != null && file.isFile() )
+        {
+            artifacts.add( file );
+        }
     }
 
     private void replaceFile( File oldFile, File newFile )
